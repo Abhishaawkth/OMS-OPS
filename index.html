@@ -475,19 +475,19 @@
 
 <!-- TOAST -->
 <div id="toast"></div>
-
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
+  // ——— SUPABASE INIT ———
+  const SUPABASE_URL = 'https://lunqwdavuwpexyowxjxu.supabase.co';
+  const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx1bnF3ZGF2dXdwZXh5b3d4anh1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM4MjEyNDYsImV4cCI6MjA4OTM5NzI0Nn0.e_MPwzrTlhqfGfn-uq1vID8LiAZV1cH_7-qHwDBvqlo';
+  const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
   // ——— STATE ———
-  let tasks = JSON.parse(localStorage.getItem('taskflow_tasks') || '[]');
+  let tasks = [];
   let currentFilter = 'all';
+  let isSaving = false;
 
   // ——— UTILS ———
-  function save() {
-    localStorage.setItem('taskflow_tasks', JSON.stringify(tasks));
-  }
-  function uid() {
-    return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  }
   function today() {
     return new Date().toISOString().split('T')[0];
   }
@@ -501,29 +501,52 @@
     t.classList.add('show');
     setTimeout(() => t.classList.remove('show'), 2200);
   }
+  function showError(msg) {
+    showToast('✗ ' + msg);
+    console.error(msg);
+  }
   function fmtDate(d) {
     if (!d) return '—';
     const [y, m, day] = d.split('-');
     const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
     return `${months[+m-1]} ${+day}, ${y}`;
   }
+  function esc(str) {
+    if (!str) return '';
+    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+  function setLoading(on) {
+    document.getElementById('task-tbody').style.opacity = on ? '0.45' : '1';
+  }
 
   // ——— HEADER DATE ———
   document.getElementById('today-date').textContent =
     new Date().toLocaleDateString('en-IN', { weekday:'short', day:'numeric', month:'short', year:'numeric' }).toUpperCase();
 
+  // ——— FETCH TASKS ———
+  async function fetchTasks() {
+    setLoading(true);
+    const { data, error } = await db
+      .from('tasks')
+      .select('*')
+      .order('created_at', { ascending: false });
+    setLoading(false);
+    if (error) { showError('Could not load tasks: ' + error.message); return; }
+    tasks = data || [];
+    render();
+  }
+
   // ——— SUMMARY ———
   function renderSummary() {
-    const total = tasks.length;
-    const done = tasks.filter(t => t.status === 'done').length;
+    const total   = tasks.length;
+    const done    = tasks.filter(t => t.status === 'done').length;
     const pending = tasks.filter(t => t.status === 'pending').length;
     const overdue = tasks.filter(t => isOverdue(t)).length;
-
     const cards = [
-      { label: 'Total Tasks', value: total, sub: 'all tasks', color: '#0D0D0D' },
-      { label: 'Completed', value: done, sub: `${total ? Math.round(done/total*100) : 0}% done`, color: '#22c55e' },
-      { label: 'Pending', value: pending, sub: 'waiting to start', color: '#D4A017' },
-      { label: 'Overdue', value: overdue, sub: 'past deadline', color: '#C0392B' },
+      { label: 'Total Tasks', value: total,   sub: 'all tasks',        color: '#0D0D0D' },
+      { label: 'Completed',   value: done,    sub: `${total ? Math.round(done/total*100) : 0}% done`, color: '#22c55e' },
+      { label: 'Pending',     value: pending, sub: 'waiting to start', color: '#D4A017' },
+      { label: 'Overdue',     value: overdue, sub: 'past deadline',    color: '#C0392B' },
     ];
     document.getElementById('summary-grid').innerHTML = cards.map(c => `
       <div class="stat-card">
@@ -559,29 +582,27 @@
     }
     empty.style.display = 'none';
 
-    tbody.innerHTML = filtered.map((t, i) => {
-      const over = isOverdue(t);
-      const high = t.priority === 'high' && !over;
-      const rowClass = over ? 'row-overdue' : (t.priority === 'high' ? 'row-high' : '');
-      const pct = Math.min(100, Math.max(0, parseInt(t.progress) || 0));
-      const fillClass = t.status === 'done' ? 'done-fill' : '';
+    tbody.innerHTML = filtered.map(t => {
+      const over        = isOverdue(t);
+      const rowClass    = over ? 'row-overdue' : (t.priority === 'high' ? 'row-high' : '');
+      const pct         = Math.min(100, Math.max(0, parseInt(t.progress) || 0));
+      const fillClass   = t.status === 'done' ? 'done-fill' : '';
       const statusClass = `status-${t.status}`;
-      const badgeClass = `badge-${t.priority}`;
-
+      const badgeClass  = `badge-${t.priority}`;
       return `
         <tr class="${rowClass} animate-in" data-id="${t.id}">
           <td class="task-title-cell"><span class="title-text" title="${esc(t.title)}">${esc(t.title)}</span></td>
           <td class="client-cell">${esc(t.client) || '—'}</td>
-          <td class="assigned-cell">${esc(t.assign) || '—'}</td>
+          <td class="assigned-cell">${esc(t.assigned_to) || '—'}</td>
           <td style="white-space:nowrap;font-family:'DM Mono',monospace;font-size:0.78rem;color:${over?'#C0392B':'#555'}">
             ${fmtDate(t.deadline)}${over ? ' ⚑' : ''}
           </td>
           <td><span class="badge ${badgeClass}">${t.priority}</span></td>
           <td>
             <select class="status-select ${statusClass}" onchange="updateStatus('${t.id}', this)">
-              <option value="pending" ${t.status==='pending'?'selected':''}>Pending</option>
+              <option value="pending"     ${t.status==='pending'    ?'selected':''}>Pending</option>
               <option value="in-progress" ${t.status==='in-progress'?'selected':''}>In Progress</option>
-              <option value="done" ${t.status==='done'?'selected':''}>Done</option>
+              <option value="done"        ${t.status==='done'       ?'selected':''}>Done</option>
             </select>
           </td>
           <td class="progress-cell">
@@ -602,60 +623,65 @@
     }).join('');
   }
 
-  function esc(str) {
-    if (!str) return '';
-    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-  }
-
-  // ——— ADD TASK ———
-  function addTask() {
-    const title = document.getElementById('f-title').value.trim();
-    const client = document.getElementById('f-client').value.trim();
-    const assign = document.getElementById('f-assign').value.trim();
-    const deadline = document.getElementById('f-deadline').value;
-    const priority = document.getElementById('f-priority').value;
+  // ——— ADD TASK → INSERT ———
+  async function addTask() {
+    const title       = document.getElementById('f-title').value.trim();
+    const client      = document.getElementById('f-client').value.trim();
+    const assigned_to = document.getElementById('f-assign').value.trim();
+    const deadline    = document.getElementById('f-deadline').value || null;
+    const priority    = document.getElementById('f-priority').value;
 
     if (!title) { showToast('⚠ Task title is required!'); document.getElementById('f-title').focus(); return; }
 
-    const task = { id: uid(), title, client, assign, deadline, priority, status: 'pending', progress: 0 };
-    tasks.unshift(task);
-    save();
+    const { data, error } = await db
+      .from('tasks')
+      .insert([{ title, client, assigned_to, deadline, priority, status: 'pending', progress: 0 }])
+      .select()
+      .single();
+    if (error) { showError('Failed to add task: ' + error.message); return; }
+
+    tasks.unshift(data);
     render();
     showToast('✓ Task added!');
-
-    // Reset
     ['f-title','f-client','f-assign','f-deadline'].forEach(id => document.getElementById(id).value = '');
     document.getElementById('f-priority').value = 'medium';
   }
 
-  // ——— UPDATE STATUS ———
-  function updateStatus(id, sel) {
+  // ——— UPDATE STATUS → UPDATE ———
+  async function updateStatus(id, sel) {
     const task = tasks.find(t => t.id === id);
     if (!task) return;
-    task.status = sel.value;
-    if (task.status === 'done' && task.progress < 100) task.progress = 100;
-    if (task.status === 'pending') task.progress = task.progress > 0 ? task.progress : 0;
-    save();
+    const updates = { status: sel.value };
+    if (sel.value === 'done' && task.progress < 100) updates.progress = 100;
+    const { error } = await db.from('tasks').update(updates).eq('id', id);
+    if (error) { showError('Failed to update status: ' + error.message); sel.value = task.status; return; }
+    Object.assign(task, updates);
     render();
   }
 
-  // ——— UPDATE PROGRESS ———
-  function updateProgress(id, inp) {
+  // ——— UPDATE PROGRESS → UPDATE ———
+  async function updateProgress(id, inp) {
+    if (isSaving) return;
     const task = tasks.find(t => t.id === id);
     if (!task) return;
-    let val = parseInt(inp.value) || 0;
-    val = Math.min(100, Math.max(0, val));
-    task.progress = val;
-    if (val === 100) task.status = 'done';
-    else if (val > 0 && task.status === 'pending') task.status = 'in-progress';
-    save();
+    let val = Math.min(100, Math.max(0, parseInt(inp.value) || 0));
+    inp.value = val;
+    const updates = { progress: val };
+    if (val === 100) updates.status = 'done';
+    else if (val > 0 && task.status === 'pending') updates.status = 'in-progress';
+    isSaving = true;
+    const { error } = await db.from('tasks').update(updates).eq('id', id);
+    isSaving = false;
+    if (error) { showError('Failed to update progress: ' + error.message); return; }
+    Object.assign(task, updates);
     render();
   }
 
-  // ——— DELETE TASK ———
-  function deleteTask(id) {
+  // ——— DELETE TASK → DELETE ———
+  async function deleteTask(id) {
+    const { error } = await db.from('tasks').delete().eq('id', id);
+    if (error) { showError('Failed to delete task: ' + error.message); return; }
     tasks = tasks.filter(t => t.id !== id);
-    save();
     render();
     showToast('Task removed.');
   }
@@ -666,13 +692,20 @@
     renderTable();
   }
 
-  // ——— ENTER KEY ON FORM ———
+  // ——— ENTER KEY ———
   document.querySelectorAll('.form-card input').forEach(inp => {
     inp.addEventListener('keydown', e => { if (e.key === 'Enter') addTask(); });
   });
 
+  // ——— REALTIME ———
+  db.channel('tasks-changes')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, () => fetchTasks())
+    .subscribe();
+
   // ——— INIT ———
-  render();
+  fetchTasks();
 </script>
+
+
 </body>
 </html>
